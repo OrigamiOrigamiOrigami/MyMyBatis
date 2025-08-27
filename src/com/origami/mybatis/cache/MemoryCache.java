@@ -8,7 +8,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * 内存二级缓存实现
- * 支持LRU淘汰策略和过期时间，符合MyBatis二级缓存标准
+ * 支持LRU淘汰策略和过期时间
  */
 public class MemoryCache implements Cache {
     
@@ -29,28 +29,18 @@ public class MemoryCache implements Cache {
     private static class CacheEntry {
         final Object value;
         final long createTime;
-        volatile long lastAccessTime;
         
         CacheEntry(Object value) {
             this.value = value;
             this.createTime = System.currentTimeMillis();
-            this.lastAccessTime = createTime;
         }
         
         boolean isExpired(long expireTimeMs) {
             return expireTimeMs > 0 && 
                    (System.currentTimeMillis() - createTime) > expireTimeMs;
         }
-        
-        void updateAccessTime() {
-            this.lastAccessTime = System.currentTimeMillis();
-        }
     }
-    
-    public MemoryCache(String namespace) {
-        this(namespace, 1000, 30 * 60 * 1000L); // 默认1000条目，30分钟过期
-    }
-    
+
     public MemoryCache(String namespace, int maxSize, long expireTimeMs) {
         this.namespace = namespace;
         this.maxSize = maxSize;
@@ -123,7 +113,6 @@ public class MemoryCache implements Cache {
             }
             
             if (entry != null) {
-                entry.updateAccessTime();
                 // 更新LRU顺序
                 accessQueue.remove(fullKey);
                 accessQueue.offer(fullKey);

@@ -29,13 +29,13 @@ public class DefaultSqlSession implements SqlSession {
  */
 
     // 缓存管理器
-    private CacheManager cacheManager;
+    private final CacheManager cacheManager;
 
     // SQL执行器
-    private final SqlExecutor sqlExecutor = new SqlExecutor();
+    private static final SqlExecutor sqlExecutor = new SqlExecutor();
 
     // 结果集映射器
-    private final ResultSetMapper resultSetMapper = new ResultSetMapper();
+    private static final ResultSetMapper resultSetMapper = new ResultSetMapper();
 
     // 事务管理
     protected Connection transactionConnection;
@@ -45,10 +45,6 @@ public class DefaultSqlSession implements SqlSession {
     private Configuration configuration;
     
     // 构造函数
-    public DefaultSqlSession() {
-        this.cacheManager = new CacheManager();
-    }
-    
     public DefaultSqlSession(CacheManager cacheManager) {
         this.cacheManager = cacheManager != null ? cacheManager : new CacheManager();
     }
@@ -79,16 +75,10 @@ public class DefaultSqlSession implements SqlSession {
             throw new RuntimeException("事务已经开启，不能重复开启");
         }
         try {
-            // 使用已有的配置对象，避免重复初始化连接池
-            if (configuration != null) {
-                transactionConnection = configuration.getConnection();
-            } else {
-                // 兜底方案：如果没有配置对象，则创建新的
-                Configuration config = Configuration.builder()
-                    .database("jdbc.properties")
-                    .build();
-                transactionConnection = config.getConnection();
+            if (configuration == null) {
+                throw new RuntimeException("Configuration未初始化，无法开启事务");
             }
+            transactionConnection = configuration.getConnection();
             transactionConnection.setAutoCommit(false);
             inTransaction = true;
             System.out.println("事务已开启");
@@ -143,9 +133,13 @@ public class DefaultSqlSession implements SqlSession {
      * @param args 方法参数
      * @return 方法执行结果
      */
-
     private Object invoke(Object proxy, Method method, Object[] args) {
         System.out.println("\n调用的方法：" + method.getName());
+
+        // 处理Object基本方法
+        if (method.getDeclaringClass() == Object.class) {
+            return handleObjectMethod(proxy, method, args);
+        }
 
         // 检查是否为增删改操作
         String modificationSql = getModificationSql(method);
@@ -162,10 +156,33 @@ public class DefaultSqlSession implements SqlSession {
     }
 
     /**
+     * 处理Object基本方法
+     */
+    private Object handleObjectMethod(Object proxy, Method method, Object[] args) {
+        String methodName = method.getName();
+        
+        switch (methodName) {
+            case "toString":
+                return proxy.getClass().getSimpleName() + "@" + Integer.toHexString(proxy.hashCode());
+            case "equals":
+                return proxy == args[0];
+            default:
+                throw new UnsupportedOperationException("不支持的Object方法: " + methodName);
+        }
+    }
+
+    /**
      * 处理增删改操作
      */
     private int handleModification(String sql, Object[] args) {
-        cacheManager.clearAll(); // 任何写操作都清空所有缓存
+        // 提取表名并清理缓存
+        String tableName = cacheManager.extractTableNameFromSQL(sql);
+        if (tableName != null) {
+            cacheManager.clearByTable(tableName);
+        } else {
+            cacheManager.clearAll(); // 无法解析表名时回退到全清
+        }
+        
         Connection connection = null;
         try {
             connection = getConnection();
@@ -213,7 +230,7 @@ public class DefaultSqlSession implements SqlSession {
                 }
                 return rs.next() ? resultSetMapper.mapResultSetToObject(rs, returnType) : null;
             });
-            cacheManager.put(cacheKey, result);
+            cacheManager.putWithTable(cacheKey, result, selectSql);
             return result;
         } catch (Exception e) {
             throw new SqlExecutionException(selectSql, args, e);
@@ -221,6 +238,7 @@ public class DefaultSqlSession implements SqlSession {
             closeResources(connection, null, null);
         }
     }
+
 
     /**
      * 获取增删改操作的SQL
@@ -245,27 +263,32 @@ public class DefaultSqlSession implements SqlSession {
         if (inTransaction && transactionConnection != null) {
             return transactionConnection;
         }
-        Configuration config = Configuration.builder()
-            .database("jdbc.properties")
-            .build();
-        return config.getConnection();
+        if (configuration == null) {
+            throw new SQLException("Configuration未初始化，无法获取数据库连接");
+        }
+        return configuration.getConnection();
     }
 
     /**
      * 关闭事务连接
      */
     private void closeTransaction() {
-        try {
-            if (transactionConnection != null) {
+        if (transactionConnection != null) {
+            try {
                 transactionConnection.setAutoCommit(true);
-                transactionConnection.close();
+            } catch (Exception e) {
+                System.err.println("恢复自动提交模式失败: " + e.getMessage());
             }
-        } catch (Exception e) {
-            System.err.println("关闭事务连接失败: " + e.getMessage());
-        } finally {
-            transactionConnection = null;
-            inTransaction = false;
+            
+            try {
+                transactionConnection.close();
+            } catch (Exception e) {
+                System.err.println("关闭事务连接失败: " + e.getMessage());
+            }
         }
+        
+        transactionConnection = null;
+        inTransaction = false;
     }
 
     /**
@@ -283,7 +306,5 @@ public class DefaultSqlSession implements SqlSession {
             System.err.println("关闭资源失败: " + e.getMessage());
         }
     }
-
-
 }
 

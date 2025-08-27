@@ -3,16 +3,16 @@ package com.origami.mybatis.cache;
 import java.io.*;
 
 /**
- * 序列化工具类，用于Redis缓存对象的序列化和反序列化
+ * 序列化工具类，用于二级缓存对象的序列化和反序列化
  */
 public class SerializationUtil {
     
     /**
      * 序列化对象为字节数组
      */
-    public static byte[] serialize(Object obj) {
+    public static void serialize(Object obj) {
         if (obj == null) {
-            return null;
+            return;
         }
         
         // 检查对象是否实现了Serializable接口
@@ -23,7 +23,6 @@ public class SerializationUtil {
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
              ObjectOutputStream oos = new ObjectOutputStream(bos)) {
             oos.writeObject(obj);
-            return bos.toByteArray();
         } catch (IOException e) {
             throw new RuntimeException("序列化失败", e);
         }

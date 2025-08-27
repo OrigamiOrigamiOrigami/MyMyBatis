@@ -4,7 +4,7 @@ import com.origami.mybatis.config.Configuration;
 
 /**
  * SqlSession工厂接口
- * 体现了工厂模式(Factory Pattern)，负责创建SqlSession实例
+ * 简单工厂模式(Simple Factory Pattern): 根据参数创建不同配置的SqlSession实例
  */
 public interface SqlSessionFactory {
 

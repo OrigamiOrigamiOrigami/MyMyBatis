@@ -2,7 +2,7 @@ package com.origami.mybatis.session;
 
 /**
  * MyMyBatis 框架的核心接口，定义了与外部交互的顶层 API。
- * 这是 "门面模式" (Facade Pattern) 的体现，为使用者提供了一个简洁统一的入口，
+ * 作为门面模式的体现，为使用者提供了一个简洁统一的入口，
  * 隐藏了内部复杂的子系统（如配置加载、SQL执行、事务管理、缓存等）。
  */
 public interface SqlSession {
