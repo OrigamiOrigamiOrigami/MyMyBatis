@@ -41,6 +41,9 @@ public class DefaultSqlSession implements SqlSession {
     protected Connection transactionConnection;
     protected boolean inTransaction = false;
     
+    // 事务同步锁
+    private final Object transactionLock = new Object();
+    
     // 配置对象
     private Configuration configuration;
     
@@ -71,49 +74,55 @@ public class DefaultSqlSession implements SqlSession {
 
     @Override
     public void beginTransaction() {
-        if (inTransaction) {
-            throw new RuntimeException("事务已经开启，不能重复开启");
-        }
-        try {
-            if (configuration == null) {
-                throw new RuntimeException("Configuration未初始化，无法开启事务");
+        synchronized (transactionLock) {
+            if (inTransaction) {
+                throw new RuntimeException("事务已经开启，不能重复开启");
             }
-            transactionConnection = configuration.getConnection();
-            transactionConnection.setAutoCommit(false);
-            inTransaction = true;
-            System.out.println("事务已开启");
-        } catch (Exception e) {
-            throw new RuntimeException("开启事务失败", e);
+            try {
+                if (configuration == null) {
+                    throw new RuntimeException("Configuration未初始化，无法开启事务");
+                }
+                transactionConnection = configuration.getConnection();
+                transactionConnection.setAutoCommit(false);
+                inTransaction = true;
+                System.out.println("事务已开启");
+            } catch (Exception e) {
+                throw new RuntimeException("开启事务失败", e);
+            }
         }
     }
 
     @Override
     public void commit() {
-        if (!inTransaction || transactionConnection == null) {
-            throw new RuntimeException("没有事务可以提交");
-        }
-        try {
-            transactionConnection.commit();
-            System.out.println("\n事务已提交");
-        } catch (Exception e) {
-            throw new RuntimeException("提交事务失败", e);
-        } finally {
-            closeTransaction();
+        synchronized (transactionLock) {
+            if (!inTransaction || transactionConnection == null) {
+                throw new RuntimeException("没有事务可以提交");
+            }
+            try {
+                transactionConnection.commit();
+                System.out.println("\n事务已提交");
+            } catch (Exception e) {
+                throw new RuntimeException("提交事务失败", e);
+            } finally {
+                closeTransaction();
+            }
         }
     }
 
     @Override
     public void rollback() {
-        if (!inTransaction || transactionConnection == null) {
-            throw new RuntimeException("没有事务可以回滚");
-        }
-        try {
-            transactionConnection.rollback();
-            System.out.println("事务已回滚");
-        } catch (Exception e) {
-            throw new RuntimeException("回滚事务失败", e);
-        } finally {
-            closeTransaction();
+        synchronized (transactionLock) {
+            if (!inTransaction || transactionConnection == null) {
+                throw new RuntimeException("没有事务可以回滚");
+            }
+            try {
+                transactionConnection.rollback();
+                System.out.println("事务已回滚");
+            } catch (Exception e) {
+                throw new RuntimeException("回滚事务失败", e);
+            } finally {
+                closeTransaction();
+            }
         }
     }
 
@@ -180,7 +189,7 @@ public class DefaultSqlSession implements SqlSession {
         if (tableName != null) {
             cacheManager.clearByTable(tableName);
         } else {
-            cacheManager.clearAll(); // 无法解析表名时回退到全清
+            cacheManager.clearAll();//找不到表名清空所有缓存
         }
         
         Connection connection = null;
@@ -260,13 +269,15 @@ public class DefaultSqlSession implements SqlSession {
      * 获取连接（事务感知）
      */
     private Connection getConnection() throws SQLException {
-        if (inTransaction && transactionConnection != null) {
-            return transactionConnection;
+        synchronized (transactionLock) {
+            if (inTransaction && transactionConnection != null) {
+                return transactionConnection;
+            }
+            if (configuration == null) {
+                throw new SQLException("Configuration未初始化，无法获取数据库连接");
+            }
+            return configuration.getConnection();
         }
-        if (configuration == null) {
-            throw new SQLException("Configuration未初始化，无法获取数据库连接");
-        }
-        return configuration.getConnection();
     }
 
     /**

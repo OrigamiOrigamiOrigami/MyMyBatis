@@ -17,6 +17,7 @@ MyMyBatis 是一个功能完整的企业级 ORM 框架，采用现代化的设�
 ### 🛠️ 技术栈
 - **核心语言**: Java 8+
 - **数据库**: MySQL 8.0+
+- **SQL解析**: JSqlParser 4.9 (智能SQL表名提取)
 - **缓存**: 内存缓存(LRU+TTL)
 - **连接池**: 自研高性能连接池
 - **测试**: JUnit 4
@@ -27,7 +28,8 @@ MyMyBatis 是一个功能完整的企业级 ORM 框架，采用现代化的设�
 ### 📋 环境要求
 - Java 8+
 - MySQL 8.0+
-- 无外部依赖，内置内存缓存
+- JSqlParser 4.9 (用于智能SQL解析)
+- 内置内存缓存，无其他外部依赖
 
 ### ⚡ 5分钟上手
 
@@ -109,7 +111,14 @@ public interface AccountMapper {
 - **生命周期**: 跨SqlSession持久化
 - **作用域**: 全局共享，进程内
 - **淘汰策略**: LRU + TTL过期机制
-- **清理时机**: 写操作时清空，自动过期清理
+- **清理时机**: 写操作时智能清空，自动过期清理
+
+### 🧠 智能缓存清理
+- **JSqlParser解析**: 使用专业SQL解析库精确提取表名
+- **支持复杂SQL**: JOIN查询、子查询、存储过程等
+- **表名识别**: 自动处理schema.table、引号表名、表别名
+- **回退机制**: 解析失败时自动回退到正则表达式
+- **精确清理**: 按表名精确清理相关缓存，避免误清
 
 ```java
 // 启用内存二级缓存
@@ -197,6 +206,20 @@ javac -cp "lib/*" -d out src/com/origami/mybatis/**/*.java
 # 运行测试
 java -cp "lib/*;out" org.junit.runner.JUnitCore com.origami.mybatis.test.MybatisTest
 ```
+
+### 📦 依赖管理
+项目使用 JSqlParser 库进行智能SQL解析：
+```xml
+<!-- Maven依赖 -->
+<dependency>
+    <groupId>com.github.jsqlparser</groupId>
+    <artifactId>jsqlparser</artifactId>
+    <version>4.9</version>
+</dependency>
+```
+
+或直接下载jar包到 `lib/` 目录：
+- jsqlparser-4.9.jar
 
 ## 📚 最佳实践
 

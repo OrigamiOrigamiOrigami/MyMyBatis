@@ -1,11 +1,18 @@
 package com.origami.mybatis.cache;
 
+import net.sf.jsqlparser.JSQLParserException;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.util.TablesNamesFinder;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.List;
+import java.util.ArrayList;
 
 /**
  * 缓存管理器，支持一级缓存和二级缓存
@@ -22,6 +29,9 @@ public class CacheManager implements Cache {
     
     // 二级缓存（SqlSessionFactory级别）
     private Cache secondLevelCache;
+    
+    // 缓存操作读写锁
+    private final ReadWriteLock cacheLock = new ReentrantReadWriteLock();
     
     public CacheManager() {
         // 默认不启用二级缓存
@@ -54,39 +64,48 @@ public class CacheManager implements Cache {
      * 存储缓存并建立表名映射关系
      */
     public void putWithTable(String key, Object value, String sql) {
-        put(key, value);
-        
-        // 建立表名到缓存Key的映射
-        String tableName = extractTableNameFromSQL(sql);
-        if (tableName != null) {
-            tableToKeys.computeIfAbsent(tableName.toLowerCase(), 
-                k -> ConcurrentHashMap.newKeySet()).add(key);
+        cacheLock.writeLock().lock();
+        try {
+            put(key, value);
+            
+            // 建立表名到缓存Key的映射
+            String tableName = extractTableNameFromSQL(sql);
+            if (tableName != null) {
+                tableToKeys.computeIfAbsent(tableName.toLowerCase(), 
+                    k -> ConcurrentHashMap.newKeySet()).add(key);
+            }
+        } finally {
+            cacheLock.writeLock().unlock();
         }
     }
 
     @Override
     public Object get(String key) {
-        
-        // 先查二级缓存（跨SqlSession共享）
-        if (secondLevelCache != null) {
-            Object value = secondLevelCache.get(key);
+        cacheLock.readLock().lock();
+        try {
+            // 先查二级缓存（跨SqlSession共享）
+            if (secondLevelCache != null) {
+                Object value = secondLevelCache.get(key);
+                if (value != null) {
+                    // 回填到一级缓存
+                    localCache.put(key, value);
+                    System.out.println("二级缓存命中，回填一级缓存");
+                    return value;
+                }
+            }
+            
+            // 再查一级缓存（当前SqlSession）
+            Object value = localCache.get(key);
             if (value != null) {
-                // 回填到一级缓存
-                localCache.put(key, value);
-                System.out.println("二级缓存命中，回填一级缓存");
+                System.out.println("一级缓存命中");
                 return value;
             }
+            
+            // 都没命中，返回null，由调用方查询数据库
+            return null;
+        } finally {
+            cacheLock.readLock().unlock();
         }
-        
-        // 再查一级缓存（当前SqlSession）
-        Object value = localCache.get(key);
-        if (value != null) {
-            System.out.println("一级缓存命中");
-            return value;
-        }
-        
-        // 都没命中，返回null，由调用方查询数据库
-        return null;
     }
 
     @Override
@@ -139,25 +158,30 @@ public class CacheManager implements Cache {
             return;
         }
         
-        String tableKey = tableName.toLowerCase();
-        Set<String> keys = tableToKeys.get(tableKey);
-        
-        if (keys != null && !keys.isEmpty()) {
-            // 从一级缓存中删除相关的缓存项
-            keys.forEach(key -> {
-                localCache.remove(key);
-                // 同时从二级缓存中删除
-                if (secondLevelCache != null) {
-                    secondLevelCache.remove(key);
-                }
-            });
+        cacheLock.writeLock().lock();
+        try {
+            String tableKey = tableName.toLowerCase();
+            Set<String> keys = tableToKeys.get(tableKey);
             
-            // 清理映射关系
-            tableToKeys.remove(tableKey);
-            
-            System.out.println("已清理表 " + tableName + " 相关缓存，共 " + keys.size() + " 个缓存项");
-        } else {
-            System.out.println("表 " + tableName + " 无相关缓存需要清理");
+            if (keys != null && !keys.isEmpty()) {
+                // 从一级缓存中删除相关的缓存项
+                keys.forEach(key -> {
+                    localCache.remove(key);
+                    // 同时从二级缓存中删除
+                    if (secondLevelCache != null) {
+                        secondLevelCache.remove(key);
+                    }
+                });
+                
+                // 清理映射关系
+                tableToKeys.remove(tableKey);
+                
+                System.out.println("已清理表 " + tableName + " 相关缓存，共 " + keys.size() + " 个缓存项");
+            } else {
+                System.out.println("表 " + tableName + " 无相关缓存需要清理");
+            }
+        } finally {
+            cacheLock.writeLock().unlock();
         }
     }
 
@@ -205,42 +229,30 @@ public class CacheManager implements Cache {
             return null;
         }
         
-        String upperSql = sql.trim().toUpperCase();
-        
-        // SELECT语句：SELECT ... FROM table_name
-        if (upperSql.contains("FROM")) {
-            Pattern pattern = Pattern.compile("FROM\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
-            Matcher matcher = pattern.matcher(sql);
-            if (matcher.find()) {
-                return matcher.group(1);
+        try {
+            // 使用JSqlParser解析SQL
+            Statement statement = CCJSqlParserUtil.parse(sql);
+            TablesNamesFinder tablesNamesFinder = new TablesNamesFinder();
+            Set<String> tableNamesSet = tablesNamesFinder.getTables(statement);
+            List<String> tableNames = new ArrayList<>(tableNamesSet);
+            
+            if (!tableNames.isEmpty()) {
+                // 返回第一个表名（主表）
+                String tableName = tableNames.get(0);
+                // 处理schema.table格式，只取表名部分
+                if (tableName.contains(".")) {
+                    tableName = tableName.substring(tableName.lastIndexOf(".") + 1);
+                }
+                // 移除引号
+                tableName = tableName.replaceAll("[`\"'\\[\\]]", "");
+                
+                System.out.println("解析成功 - 主表: " + tableName +
+                                 (tableNames.size() > 1 ? ", 涉及表数: " + tableNames.size() : ""));
+                return tableName.toLowerCase();
             }
-        }
-        
-        // INSERT语句：INSERT INTO table_name
-        if (upperSql.startsWith("INSERT INTO")) {
-            Pattern pattern = Pattern.compile("INSERT\\s+INTO\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
-            Matcher matcher = pattern.matcher(sql);
-            if (matcher.find()) {
-                return matcher.group(1);
-            }
-        }
-        
-        // UPDATE语句：UPDATE table_name SET
-        if (upperSql.startsWith("UPDATE")) {
-            Pattern pattern = Pattern.compile("UPDATE\\s+(\\w+)\\s+SET", Pattern.CASE_INSENSITIVE);
-            Matcher matcher = pattern.matcher(sql);
-            if (matcher.find()) {
-                return matcher.group(1);
-            }
-        }
-        
-        // DELETE语句：DELETE FROM table_name
-        if (upperSql.startsWith("DELETE FROM")) {
-            Pattern pattern = Pattern.compile("DELETE\\s+FROM\\s+(\\w+)", Pattern.CASE_INSENSITIVE);
-            Matcher matcher = pattern.matcher(sql);
-            if (matcher.find()) {
-                return matcher.group(1);
-            }
+            
+        } catch (JSQLParserException e) {
+            System.out.println("解析失败: " + e.getMessage());
         }
         
         return null;

@@ -47,7 +47,7 @@ public class MybatisTest {
 
             // 测试查询操作
             try {
-                Account account = mapper.selectAccount(2);
+                Account account = mapper.selectAccount(3);
                 System.out.println("查询单条记录: " + account);
             }catch (Exception ignored){}
 
@@ -61,7 +61,7 @@ public class MybatisTest {
                 System.out.println("查询结果: " + account);
             }
 
-            Map<String, Object> accountMap = mapper.selectAccountAsMap(2);
+            Map<String, Object> accountMap = mapper.selectAccountAsMap(3);
             System.out.println("查询结果为Map: " + accountMap);
 
             // 提交事务
@@ -146,7 +146,7 @@ public class MybatisTest {
             
             //模拟异常情况
             int i = 1 / 0;
-            
+
             session.commit();
             System.out.println("事务提交成功");
             
